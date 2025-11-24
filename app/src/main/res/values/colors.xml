@@ -1,0 +1,12 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <color name="black">#FF000000</color>
+    <color name="white">#FFFFFFFF</color>
+
+    <color name="NoteColor1">#AB6060</color>
+    <color name="NoteColor2">#4CAF50</color>
+    <color name="NoteColor3">#03A9F4</color>
+    <color name="NoteColor4">#A01313</color>
+    <color name="NoteColor5">#FFEB3B</color>
+    <color name="NoteColor6">#EB6B6B</color>
+</resources>
