@@ -94,6 +94,16 @@ companion object {
 - Lazily exposes `val allNotes = noteDao.getAllNotes()`.
 - Wraps suspend DAO calls so future data sources (network, cache) can be inserted without touching UI code.
 
+```kotlin
+class NotesRepository(private val noteDao: NoteDao) {
+    val allNotes: LiveData<List<Note>> = noteDao.getAllNotes()
+
+    suspend fun insert(note: Note) = noteDao.insert(note)
+    suspend fun delete(note: Note) = noteDao.delete(note)
+    suspend fun update(note: Note) = noteDao.update(note)
+}
+```
+
 ### `Models/NoteViewModel.kt`
 - Extends `AndroidViewModel` to access application context for DB creation.
 - Holds `val allNotes: LiveData<List<Note>>` and exposes coroutine-backed helpers.
