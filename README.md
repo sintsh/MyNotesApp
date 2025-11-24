@@ -36,10 +36,9 @@ The project is intentionally structured around the Model-View-ViewModel pattern 
 This approach keeps Activities lean, minimizes mutable shared state, and makes it straightforward to plug in tests or swap UI pieces later.
 
 ## Code Walkthrough
-### Data Model (`app/src/main/java/com/example/mynotesapp/Models/Note.kt`)
-- Annotated with `@Entity(tableName = "notes_table")`, so Room auto-creates the table.
-- Nullable `id` lets Room autogenerate primary keys during insertion.
-- Implements `Serializable`, which makes passing a whole `Note` between Activities easy.
+### `Models/Note.kt`
+- Room `@Entity` describing a note record; nullable primary key supports auto-generation.
+- Implements `Serializable` for easy passing through intents.
 
 ```kotlin
 @Entity(tableName = "notes_table")
@@ -51,10 +50,10 @@ data class Note(
 ) : Serializable
 ```
 
-### Data Access (`Database/NoteDao.kt`, `NoteDatabase.kt`, `NotesRepository.kt`)
-- `NoteDao` declares suspend CRUD methods; Room generates the implementation.
-- `NoteDatabase` wraps the Room builder in a singleton so only one DB instance exists.
-- `NotesRepository` is intentionally thin—it simply forwards calls to the DAO but gives us a centralized place to swap data sources later (e.g., add caching or network).
+### Data Access Layer
+#### `Database/NoteDao.kt`
+- Declares suspend CRUD operations. Room generates query code at compile time.
+- `getAllNotes()` returns `LiveData<List<Note>>`, which plugs straight into the ViewModel.
 
 ```kotlin
 @Dao
@@ -62,21 +61,43 @@ interface NoteDao {
     @Insert(onConflict = OnConflictStrategy.REPLACE)
     suspend fun insert(note: Note)
 
-    @Delete
-    suspend fun delete(note: Note)
-
-    @Update
-    suspend fun update(note: Note)
+    @Delete suspend fun delete(note: Note)
+    @Update suspend fun update(note: Note)
 
     @Query("SELECT * FROM notes_table ORDER BY id ASC")
     fun getAllNotes(): LiveData<List<Note>>
 }
 ```
 
-### ViewModel (`Models/NoteViewModel.kt`)
-- Holds `val allNotes: LiveData<List<Note>>` coming from the repository.
-- Exposes `insertNote`, `deleteNote`, and `updateNote`, each launching coroutines on `Dispatchers.IO`.
-- Keeps Activities unaware of the database implementation—UI simply observes changes and calls these helpers.
+#### `Database/NoteDatabase.kt`
+- Annotated with `@Database(entities = [Note::class], version = 1)`.
+- Exposes `abstract fun getNoteDao(): NoteDao`.
+- Uses a `companion object` + `@Volatile` singleton so the Room instance is created once app-wide.
+
+```kotlin
+companion object {
+    @Volatile private var INSTANCE: NoteDatabase? = null
+
+    fun getDatabase(context: Context): NoteDatabase =
+        INSTANCE ?: synchronized(this) {
+            Room.databaseBuilder(
+                context.applicationContext,
+                NoteDatabase::class.java,
+                DATABASE_NAME
+            ).build().also { INSTANCE = it }
+        }
+}
+```
+
+#### `Database/NotesRepository.kt`
+- Provides a clean API for the rest of the app.
+- Lazily exposes `val allNotes = noteDao.getAllNotes()`.
+- Wraps suspend DAO calls so future data sources (network, cache) can be inserted without touching UI code.
+
+### `Models/NoteViewModel.kt`
+- Extends `AndroidViewModel` to access application context for DB creation.
+- Holds `val allNotes: LiveData<List<Note>>` and exposes coroutine-backed helpers.
+- Ensures database work stays on the IO dispatcher.
 
 ```kotlin
 fun insertNote(note: Note) = viewModelScope.launch(Dispatchers.IO) {
@@ -84,13 +105,53 @@ fun insertNote(note: Note) = viewModelScope.launch(Dispatchers.IO) {
 }
 ```
 
-### UI Layer (`MainActivity.kt`, `AddNote.kt`, `Adapter/NotesAdapter.kt`)
-- `MainActivity` sets up `RecyclerView`, observes `viewModel.allNotes`, and updates the adapter whenever the list changes.
-- Uses `registerForActivityResult` twice: once for creating notes and once for editing existing notes. Returned `Note` objects are passed straight back to the ViewModel.
-- `AddNote` handles both create and edit flows. If it receives `current_note`, it prepopulates inputs and updates that record; otherwise it creates a new `Note`.
-- `NotesAdapter` binds note data to `list_item.xml`, raises click + long-press events, and supports a simple `filterList(query)` search.
+### UI Layer
+#### `MainActivity.kt`
+- Wires up `RecyclerView` with a `StaggeredGridLayoutManager` and `NotesAdapter`.
+- Observes `viewModel.allNotes` to refresh the adapter automatically.
+- Uses two `registerForActivityResult` launchers: one for creating notes, one for editing existing entries.
+- Handles search (delegates to adapter filter) and displays a contextual `PopupMenu` for deletions.
 
-This section should give you a mental map for navigating the code: start at the Activity to see user events, follow calls into the ViewModel, then step into the repository/DAO as needed.
+```kotlin
+viewModel.allNotes.observe(this) { list ->
+    list?.let { adapter.updateList(it) }
+}
+```
+
+#### `AddNote.kt`
+- Reused for both “add” and “edit” flows. If a `current_note` extra exists, fields are prefilled.
+- Builds a `Note` object, stamps it with a formatted date, and returns it via `setResult`.
+- Basic validation ensures empty notes aren’t saved; `Toast` provides feedback.
+
+```kotlin
+if (isUpdate) {
+    note = old_note.copy(title = title, note = noteDesc, date = formatter.format(Date()))
+} else {
+    note = Note(null, title, noteDesc, formatter.format(Date()))
+}
+```
+
+#### `Adapter/NotesAdapter.kt`
+- Holds a mutable list of notes plus a backup copy used for search filtering.
+- Emits callbacks through `NotesClickListener` for short tap and long press.
+- `onBindViewHolder` binds title, snippet, and date; `filterList(query)` performs case-insensitive matching across title/note body.
+
+```kotlin
+fun filterList(query: String) {
+    val filtered = oldNotes.filter {
+        it.title?.contains(query, ignoreCase = true) == true ||
+        it.note?.contains(query, ignoreCase = true) == true
+    }
+    notes.clear()
+    notes.addAll(filtered)
+    notifyDataSetChanged()
+}
+```
+
+#### `Utilties/constants.kt`
+- Stores `const val DATABASE_NAME = "notes_database"`, keeping the string in one place for reuse by `NoteDatabase`.
+
+This walkthrough gives you a file-by-file roadmap: start from UI events in `MainActivity`/`AddNote`, follow the ViewModel into the repository, and drill into Room components as needed.
 
 ## Tech Stack
 - Kotlin, Coroutines, ViewBinding
