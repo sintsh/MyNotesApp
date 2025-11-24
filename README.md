@@ -35,6 +35,63 @@ The project is intentionally structured around the Model-View-ViewModel pattern 
 
 This approach keeps Activities lean, minimizes mutable shared state, and makes it straightforward to plug in tests or swap UI pieces later.
 
+## Code Walkthrough
+### Data Model (`app/src/main/java/com/example/mynotesapp/Models/Note.kt`)
+- Annotated with `@Entity(tableName = "notes_table")`, so Room auto-creates the table.
+- Nullable `id` lets Room autogenerate primary keys during insertion.
+- Implements `Serializable`, which makes passing a whole `Note` between Activities easy.
+
+```kotlin
+@Entity(tableName = "notes_table")
+data class Note(
+    @PrimaryKey(autoGenerate = true) val id: Int?,
+    @ColumnInfo(name = "title") val title: String?,
+    @ColumnInfo(name = "note") val note: String?,
+    @ColumnInfo(name = "date") val date: String?
+) : Serializable
+```
+
+### Data Access (`Database/NoteDao.kt`, `NoteDatabase.kt`, `NotesRepository.kt`)
+- `NoteDao` declares suspend CRUD methods; Room generates the implementation.
+- `NoteDatabase` wraps the Room builder in a singleton so only one DB instance exists.
+- `NotesRepository` is intentionally thin—it simply forwards calls to the DAO but gives us a centralized place to swap data sources later (e.g., add caching or network).
+
+```kotlin
+@Dao
+interface NoteDao {
+    @Insert(onConflict = OnConflictStrategy.REPLACE)
+    suspend fun insert(note: Note)
+
+    @Delete
+    suspend fun delete(note: Note)
+
+    @Update
+    suspend fun update(note: Note)
+
+    @Query("SELECT * FROM notes_table ORDER BY id ASC")
+    fun getAllNotes(): LiveData<List<Note>>
+}
+```
+
+### ViewModel (`Models/NoteViewModel.kt`)
+- Holds `val allNotes: LiveData<List<Note>>` coming from the repository.
+- Exposes `insertNote`, `deleteNote`, and `updateNote`, each launching coroutines on `Dispatchers.IO`.
+- Keeps Activities unaware of the database implementation—UI simply observes changes and calls these helpers.
+
+```kotlin
+fun insertNote(note: Note) = viewModelScope.launch(Dispatchers.IO) {
+    repository.insert(note)
+}
+```
+
+### UI Layer (`MainActivity.kt`, `AddNote.kt`, `Adapter/NotesAdapter.kt`)
+- `MainActivity` sets up `RecyclerView`, observes `viewModel.allNotes`, and updates the adapter whenever the list changes.
+- Uses `registerForActivityResult` twice: once for creating notes and once for editing existing notes. Returned `Note` objects are passed straight back to the ViewModel.
+- `AddNote` handles both create and edit flows. If it receives `current_note`, it prepopulates inputs and updates that record; otherwise it creates a new `Note`.
+- `NotesAdapter` binds note data to `list_item.xml`, raises click + long-press events, and supports a simple `filterList(query)` search.
+
+This section should give you a mental map for navigating the code: start at the Activity to see user events, follow calls into the ViewModel, then step into the repository/DAO as needed.
+
 ## Tech Stack
 - Kotlin, Coroutines, ViewBinding
 - AndroidX AppCompat, RecyclerView, Material Components
